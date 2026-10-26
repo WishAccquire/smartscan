@@ -12,14 +12,11 @@ Features
 - OCR: Extract text from an image and export the result as a TXT file.
 - Export: Download the selected image or export a multi-page, image-based PDF.
 Technology Stack
-Layer	Technologies
-Frontend	React, Vite, JavaScript, CSS, react-image-crop
-Backend	Python, FastAPI
-Image processing	Browser Canvas API for manual adjustments; backend image-processing endpoints for scanning/enhancement
-OCR	Tesseract OCR (system installation required)
-Object detection	YOLO through the backend comparison endpoint
-
-
+- Frontend: React, Vite, JavaScript, CSS, react-image-crop
+- Backend: Python and FastAPI
+- Image processing: Browser Canvas API for manual adjustments; backend endpoints for scanning and enhancement
+- OCR: Tesseract OCR (requires installation)
+- Object detection: YOLO, via a backend endpoint
 Prerequisites
 - Node.js 20+ and npm
 - Python 3.10+
@@ -87,7 +84,7 @@ POST	/ocr	Extract text
 POST	/pdf	Create a multi-page PDF from images
 
 
-The original starter documents /health, /scan, /ocr, and /pdf. The advanced endpoints must also be implemented in your current backend for the corresponding frontend features to work. Check /docs to confirm which routes are available.
+The original starter includes /health, /scan, /ocr, and /pdf. The advanced endpoints must also be implemented in your current backend for the corresponding frontend features to work. Check /docs to confirm which routes are available.
 Troubleshooting
 Problem	What to check
 Frontend does not open	Run npm install and npm run dev inside frontend/.
