@@ -122,6 +122,108 @@ async function createCroppedBlob(imageUrl, cropPixels) {
 }
 
 
+async function renderAdjustedCanvas(imageUrl, a) {
+  const image = new Image();
+
+  await new Promise((resolve, reject) => {
+    image.onload = resolve;
+    image.onerror = reject;
+    image.src = imageUrl;
+  });
+
+  const canvas = document.createElement('canvas');
+  canvas.width = image.naturalWidth;
+  canvas.height = image.naturalHeight;
+
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Canvas unavailable');
+
+  const brightness = 100 + a.brightness;
+  const contrast = 100 + a.contrast;
+  const saturation = 100 + a.saturation;
+  const exposure = Math.pow(2, a.exposure / 100);
+
+  ctx.filter = `
+    brightness(${brightness}%)
+    contrast(${contrast}%)
+    saturate(${saturation}%)
+    brightness(${exposure * 100}%)
+  `;
+
+  ctx.drawImage(image, 0, 0);
+  ctx.filter = 'none';
+
+  const pixels = ctx.getImageData(
+    0, 0, canvas.width, canvas.height
+  );
+
+  const data = pixels.data;
+  const temperature = a.temperature * 0.5;
+
+  for (let i = 0; i < data.length; i += 4) {
+    data[i] = Math.max(
+      0, Math.min(255, data[i] + temperature)
+    );
+
+    data[i + 2] = Math.max(
+      0, Math.min(255, data[i + 2] - temperature)
+    );
+  }
+
+  ctx.putImageData(pixels, 0, 0);
+
+  // Sharpness: 3x3 convolution
+  if (a.sharpness > 0) {
+    const source = ctx.getImageData(
+      0, 0, canvas.width, canvas.height
+    );
+    const output = ctx.createImageData(
+      canvas.width, canvas.height
+    );
+
+    output.data.set(source.data);
+    const strength = a.sharpness / 100;
+    const w = canvas.width;
+    const h = canvas.height;
+
+    for (let y = 1; y < h - 1; y++) {
+      for (let x = 1; x < w - 1; x++) {
+        const i = (y * w + x) * 4;
+
+        for (let c = 0; c < 3; c++) {
+          const center = source.data[i + c] * (1 + 4 * strength);
+          const neighbors = (
+            source.data[i - 4 + c] +
+            source.data[i + 4 + c] +
+            source.data[i - w * 4 + c] +
+            source.data[i + w * 4 + c]
+          ) * strength;
+
+          output.data[i + c] = Math.max(
+            0, Math.min(255, center - neighbors)
+          );
+        }
+      }
+    }
+
+    ctx.putImageData(output, 0, 0);
+  }
+
+  return canvas;
+}
+
+const DEFAULT_ADJUSTMENTS = {
+  brightness: 0,
+  contrast: 0,
+  saturation: 0,
+  sharpness: 0,
+  exposure: 0,
+  temperature: 0
+};
+
+
+
+
 
 function App() {
   const [pages, setPages] = useState([]);
@@ -157,6 +259,12 @@ function App() {
   const cropImageRef = useRef(null);
   const [cropBusy, setCropBusy] = useState(false);
   const pagesRef = useRef([]);
+
+
+  const [adjustments, setAdjustments] = useState(DEFAULT_ADJUSTMENTS);
+  const [adjustPreview, setAdjustPreview] = useState(null);
+  const [adjustBusy, setAdjustBusy] = useState(false);
+
   const current = pages[selected];
   const activeFile = current?.croppedFile || current?.file;
   const activeUrl = current?.croppedUrl || current?.originalUrl;
@@ -169,6 +277,109 @@ function App() {
       if (p.croppedUrl) URL.revokeObjectURL(p.croppedUrl);
     });
   }, []);
+
+
+  useEffect(() => {
+    if (!current || !activeUrl) {
+      setAdjustPreview(null);
+      return;
+    }
+
+    let cancelled = false;
+
+    const hasChanges = Object.values(adjustments)
+      .some(value => value !== 0);
+
+    if (!hasChanges) {
+      setAdjustPreview(null);
+      return;
+    }
+
+    async function updatePreview() {
+      try {
+        const canvas = await renderAdjustedCanvas(
+          current.processedUrl || activeUrl,
+          adjustments
+        );
+
+        if (!cancelled) {
+          setAdjustPreview(canvas.toDataURL('image/png'));
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setError(error.message || 'Preview failed');
+        }
+      }
+    }
+
+    updatePreview();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    current?.originalUrl,
+    current?.croppedUrl,
+    current?.processedUrl,
+    adjustments
+  ]);
+
+
+  async function applyAdjustments() {
+    if (!current || adjustBusy || busy || cropBusy) return;
+
+    const pageIndex = selected;
+    const sourceUrl = current.processedUrl || activeUrl;
+
+    setAdjustBusy(true);
+    setError('');
+
+    try {
+      const canvas = await renderAdjustedCanvas(
+        sourceUrl,
+        adjustments
+      );
+
+      const blob = await new Promise((resolve, reject) => {
+        canvas.toBlob(
+          result => result
+            ? resolve(result)
+            : reject(new Error('Image conversion failed')),
+          'image/png'
+        );
+      });
+
+      const url = URL.createObjectURL(blob);
+
+      setPages(old => old.map((page, index) => {
+        if (index !== pageIndex) return page;
+
+        if (page.processedUrl) {
+          URL.revokeObjectURL(page.processedUrl);
+        }
+
+        return {
+          ...page,
+          processedBlob: blob,
+          processedUrl: url
+        };
+      }));
+
+      setAdjustments(DEFAULT_ADJUSTMENTS);
+      setAdjustPreview(null);
+      setOcr('');
+      setQuality(null);
+      setComparison(null);
+      setYoloResult(null);
+
+    } catch (error) {
+      setError(error.message || 'Adjustment failed');
+    } finally {
+      setAdjustBusy(false);
+    }
+  }
+
+
 
   function addFiles(event) {
     const files = Array.from(event.target.files || []).filter(f =>
@@ -605,6 +816,10 @@ function App() {
       return copy;
     });
     setSelected(next);
+
+    setAdjustments(DEFAULT_ADJUSTMENTS);
+    setAdjustPreview(null);
+
     setQuality(null);
     setComparison(null);
     setComparisonError('');
@@ -699,6 +914,8 @@ function App() {
               key={p.originalUrl}
               onClick={() => {
                 setSelected(i);
+                setAdjustments(DEFAULT_ADJUSTMENTS);
+                setAdjustPreview(null);
                 setOcr('');
                 setQuality(null);
                 setComparison(null);
@@ -775,7 +992,7 @@ function App() {
             <div className="preview">
               {current
                 ? <img
-                  src={current.processedUrl || activeUrl}
+                  src={adjustPreview || current.processedUrl || activeUrl}
                   alt="Enhanced document"
                 />
                 : <p>Enhanced preview appears here</p>}
@@ -789,10 +1006,22 @@ function App() {
 
         <div className="row">
           <button
-            disabled={!current?.processedBlob || busy}
-            onClick={() =>
-              download(current.processedBlob, 'enhanced-page.png')}
-          >Download PNG</button>
+            disabled={!current || busy || cropBusy}
+            onClick={() => {
+              const blob =
+                current.processedBlob ||
+                current.croppedFile ||
+                current.file;
+
+              const extension =
+                blob.type === 'image/jpeg' ? 'jpg' :
+                  blob.type === 'image/webp' ? 'webp' : 'png';
+
+              download(blob, `smartscan-page.${extension}`);
+            }}
+          >
+            Download Image
+          </button>
           <button
             disabled={!pages.length || busy}
             onClick={exportPdf}
@@ -1203,6 +1432,58 @@ function App() {
       </article>
 
       <aside>
+
+        <section className="manual-adjustments">
+          <h2>🎛️ Manual Image Adjustments</h2>
+
+          {[
+            ['brightness', 'Brightness'],
+            ['contrast', 'Contrast'],
+            ['saturation', 'Saturation'],
+            ['sharpness', 'Sharpness'],
+            ['exposure', 'Exposure'],
+            ['temperature', 'Temperature']
+          ].map(([key, label]) => (
+            <div className="slider-field" key={key}>
+              <label>
+                {label}
+                <strong>{adjustments[key]}</strong>
+              </label>
+              <input
+                type="range"
+                min={key === 'sharpness' ? 0 : -100}
+                max="100"
+                step="1"
+                value={adjustments[key]}
+                disabled={!current || adjustBusy}
+                onChange={e =>
+                  setAdjustments(old => ({
+                    ...old,
+                    [key]: Number(e.target.value)
+                  }))
+                }
+              />
+            </div>
+          ))}
+
+          <div className="adjust-buttons">
+            <button
+              disabled={!current || adjustBusy}
+              onClick={applyAdjustments}
+              className="primary"
+            >
+              {adjustBusy ? 'Applying...' : 'Apply Adjustments'}
+            </button>
+
+            <button
+              disabled={!current || adjustBusy}
+              onClick={() => setAdjustments(DEFAULT_ADJUSTMENTS)}
+            >
+              Reset Sliders
+            </button>
+          </div>
+        </section>
+
         <h2>Enhancement</h2>
         <label className="field-label">
           Filter
