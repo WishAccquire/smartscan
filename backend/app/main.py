@@ -12,6 +12,7 @@ from .processing import (
 )
 from .quality import analyze_image, compare_quality
 from .comparison import comparison_report
+from .detection import compare_detections
 
 app = FastAPI(title='Document Scanner API', version='0.1.0')
 app.add_middleware(CORSMiddleware, allow_origins=['http://localhost:5173', 'http://127.0.0.1:5173'], allow_methods=['*'], allow_headers=['*'])
@@ -189,3 +190,36 @@ async def compare_algorithms(
         )
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
+
+
+
+# =====================================
+# MODULE D: YOLO DETECTION COMPARISON
+# =====================================
+
+@app.post("/yolo-comparison")
+async def yolo_comparison(
+    original: UploadFile = File(...),
+    enhanced: UploadFile = File(...),
+    confidence: float = Form(0.25)
+):
+    if not 0.01 <= confidence <= 1.0:
+        raise HTTPException(
+            status_code=422,
+            detail="Confidence must be between 0.01 and 1.0"
+        )
+
+    original_image = await read_image(original)
+    enhanced_image = await read_image(enhanced)
+
+    try:
+        return compare_detections(
+            original_image,
+            enhanced_image,
+            confidence=confidence
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=str(exc)
+        ) from exc
